@@ -20,11 +20,32 @@ Parameters:
   PrivateSubnet2CIDR:
     Type: String
     Default: 10.0.4.0/24
+  WordPressImageId:
+    Type: AWS::EC2::Image::Id
+    Description: The AMI ID for the initial "WordPress Certified by Bitnami and Automattic" image in us-east-1. This AMI ID is region-specific and may change over time. Please verify the latest AMI ID in the AWS Marketplace before deploying this template.
+    Default: ami-0c46db45b631d4cf5 # Example AMI ID for us-east-1
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair for SSH access.
+  EC2InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3a.micro
+    Description: EC2 instance type to launch for the WooCommerce application.
   TagKey:
     Type: String
+    Description: Key for tagging resources in this template.
     Default: project
   TagValue:
     Type: String
+    Description: Value for tagging resources in this template.
     Default: e-commerce
 
 Resources:
@@ -59,6 +80,7 @@ Resources:
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
     DeletionPolicy: Delete
+    DependsOn: [VPC, InternetGateway]
     Properties:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
@@ -154,6 +176,7 @@ Resources:
   PublicSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     DeletionPolicy: Delete
+    DependsOn: [PublicRouteTable, PublicSubnet1]
     Properties:
       SubnetId: !Ref PublicSubnet1
       RouteTableId: !Ref PublicRouteTable
@@ -161,6 +184,7 @@ Resources:
   PublicSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     DeletionPolicy: Delete
+    DependsOn: [PublicRouteTable, PublicSubnet1]
     Properties:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
@@ -183,6 +207,7 @@ Resources:
   PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     DeletionPolicy: Delete
+    DependsOn: [PrivateRouteTable, PrivateSubnet1]
     Properties:
       SubnetId: !Ref PrivateSubnet1
       RouteTableId: !Ref PrivateRouteTable
@@ -190,6 +215,7 @@ Resources:
   PrivateSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     DeletionPolicy: Delete
+    DependsOn: [PrivateRouteTable, PrivateSubnet2]
     Properties:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
@@ -278,6 +304,100 @@ Resources:
         - Key: !Ref TagKey
           Value: !Ref TagValue
 
+  ############################################################################################
+  # IAM Role
+  ############################################################################################
+
+  EC2S3Role:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Delete
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-EC2S3Role"
+        - Key: !Ref TagKey
+          Value: !Ref TagValue
+
+  EC2S3InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    DeletionPolicy: Delete
+    Properties:
+      Roles:
+        - !Ref EC2S3Role
+      Path: /
+
+  ############################################################################################
+  # EC2 Instance
+  ############################################################################################
+
+  InitWooCommerceInstance:
+    Type: AWS::EC2::Instance
+    DeletionPolicy: Delete
+    DependsOn: [EC2S3InstanceProfile, EC2SecurityGroup, PublicSubnet1]
+    Properties:
+      ImageId: !Ref WordPressImageId
+      InstanceType: !Ref EC2InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+      IamInstanceProfile: !Ref EC2S3InstanceProfile
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-WooCommerceInstance"
+        - Key: !Ref TagKey
+          Value: !Ref TagValue
+
+  ##############################################################################################
+  # Memcached Cluster
+  ##############################################################################################
+
+  MemcachedSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    DeletionPolicy: Delete
+    Properties:
+      Description: Subnet group for Memcached cluster
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      CacheSubnetGroupName: !Sub "${VpcName}-MemcachedSubnetGroup"
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-MemcachedSubnetGroup"
+        - Key: !Ref TagKey
+          Value: !Ref TagValue
+  
+  MemcachedCluster:
+    Type: AWS::ElastiCache::CacheCluster
+    DeletionPolicy: Delete
+    Properties:
+      CacheNodeType: cache.t3.micro
+      Engine: memcached
+      NumCacheNodes: 1
+      CacheSubnetGroupName: !Ref MemcachedSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref ElasticacheSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-MemcachedCluster"
+        - Key: !Ref TagKey
+          Value: !Ref TagValue
 
 ############################################################################################
 # Output
@@ -296,3 +416,14 @@ Outputs:
     Value: !Ref PrivateSubnet2
   S3GatewayEndpointId:
     Value: !Ref S3GatewayEndpoint
+  EC2InstanceId:
+    Value: !Ref InitWooCommerceInstance
+  EC2InstancePublicIP:
+    Value: !GetAtt InitWooCommerceInstance.PublicIp
+  EC2S3RoleArn:
+    Value: !GetAtt EC2S3Role.Arn
+  MemcachedClusterEndpoint:
+    Value: !GetAtt MemcachedCluster.ConfigurationEndpoint.Address
+  MemcachedClusterPort:
+    Value: !GetAtt MemcachedCluster.ConfigurationEndpoint.Port
+    

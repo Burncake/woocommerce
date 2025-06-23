@@ -242,7 +242,42 @@ Resources:
         - Key: !Ref TagKey
           Value: !Ref TagValue
 
-  
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Delete
+    DependsOn: EC2SecurityGroup
+    Properties:
+      GroupDescription: Allow MySQL access from EC2 instances
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref EC2SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-RDSSecurityGroup"
+        - Key: !Ref TagKey
+          Value: !Ref TagValue
+
+  ElasticacheSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Delete
+    DependsOn: EC2SecurityGroup
+    Properties:
+      GroupDescription: Allow Memcached access from EC2 instances
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 11211
+          ToPort: 11211
+          SourceSecurityGroupId: !Ref EC2SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-ElasticacheSecurityGroup"
+        - Key: !Ref TagKey
+          Value: !Ref TagValue
+
 
 ############################################################################################
 # Output

@@ -399,6 +399,90 @@ Resources:
         - Key: !Ref TagKey
           Value: !Ref TagValue
 
+  ############################################################################################
+  # S3 Bucket
+  ############################################################################################
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub "woocommerce-bucket-${AWS::Region}-${AWS::AccountId}"
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref TagValue
+
+  ############################################################################################
+  # CloudFront Distribution
+  ############################################################################################
+
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    DeletionPolicy: Delete
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${VpcName}-S3OriginAccessControl"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DeletionPolicy: Delete
+    DependsOn: [S3Bucket, CloudFrontOAC]
+    Properties:
+      DistributionConfig:
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt S3Bucket.RegionalDomainName
+            S3OriginConfig: {}
+            OriginAccessControlId: !Ref CloudFrontOAC
+        Enabled: true
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-CloudFrontDistribution"
+        - Key: !Ref TagKey
+          Value: !Ref TagValue
+
+  ############################################################################################
+  # S3 Bucket Policy
+  ############################################################################################
+
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Delete
+    DependsOn: [S3Bucket, CloudFrontDistribution]
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipal
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action:
+              - s3:GetObject
+            Resource: !Sub "${S3Bucket.Arn}/*"
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
 ############################################################################################
 # Output
 ############################################################################################
@@ -426,4 +510,8 @@ Outputs:
     Value: !GetAtt MemcachedCluster.ConfigurationEndpoint.Address
   MemcachedClusterPort:
     Value: !GetAtt MemcachedCluster.ConfigurationEndpoint.Port
+  S3BucketName:
+    Value: !Ref S3Bucket
+  CloudFrontURL:
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
     
